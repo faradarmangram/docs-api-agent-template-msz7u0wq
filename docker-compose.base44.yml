@@ -1,0 +1,89 @@
+# Base44 development compose — runs the app from bind-mounted source
+# with live-reload dev servers. Do not use for production.
+services:
+  database:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: docsagent
+      POSTGRES_PASSWORD: docsagent_dev_password
+      POSTGRES_DB: docs_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docsagent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+
+  backend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+      - backend_uploads:/app/uploads
+    env_file:
+      - /run/base44/app.env
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://docsagent:docsagent_dev_password@database:5432/docs_agent
+      FRONTEND_URL: https://3000-${BASE44_PUBLIC_HOST_SUFFIX}
+      CORS_ORIGIN: https://3000-${BASE44_PUBLIC_HOST_SUFFIX}
+      MAX_FILE_SIZE: "10485760"
+      UPLOAD_DIR: ./uploads
+      RATE_LIMIT_WINDOW_MS: "900000"
+      RATE_LIMIT_MAX_REQUESTS: "100"
+      EMBEDDING_MODEL: text-embedding-3-small
+      EMBEDDING_DIMENSIONS: "1536"
+      CLAUDE_MODEL: claude-sonnet-4-5-20250929
+      CLAUDE_MAX_TOKENS: "4096"
+      CLAUDE_TEMPERATURE: "0.3"
+    ports:
+      - "3001:3001"
+    depends_on:
+      database:
+        condition: service_healthy
+    command: ["sh", "-ec", "npm install && npx prisma generate && npx prisma migrate deploy && npm run db:init && exec npm run dev"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: on-failure
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: https://3001-${BASE44_PUBLIC_HOST_SUFFIX}
+      NEXT_PUBLIC_APP_NAME: Docs Agent
+      BASE44_PREVIEW_MODE: ${BASE44_PREVIEW_MODE:-}
+      BASE44_PUBLIC_HOST_SUFFIX: ${BASE44_PUBLIC_HOST_SUFFIX:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    command: ["sh", "-ec", "npm install && exec npx next dev -H 0.0.0.0 -p 3000"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  backend_node_modules:
+  backend_uploads:
+  frontend_node_modules:
+  frontend_next:
